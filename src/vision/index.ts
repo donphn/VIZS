@@ -1,4 +1,4 @@
-import type { AnalyzeReceipt, ImageInput, Receipt, ReceiptItem } from "../types.js";
+import type { AnalyzeReceipt, ImageInput, Receipt, ReceiptAnalysis, ReceiptItem } from "../types.js";
 import { DEFAULT_GROK_MODEL, grokChat, type GrokMessage } from "./grok.js";
 
 export { grokChat, GrokError } from "./grok.js";
@@ -8,6 +8,8 @@ const SYSTEM_PROMPT = `You extract structured data from photos of purchase recei
 Respond with ONE JSON object and nothing else, using exactly this shape:
 {
   "is_receipt": boolean,
+  "readable": boolean,           // false if it IS a receipt but items/prices can't be read reliably
+  "unreadable_reason": string | null, // short, e.g. "too blurry", "items cut off", "too dark"
   "merchant": string | null,
   "currency": string,            // ISO 4217 code, e.g. "USD"
   "items": [{ "name": string, "price": number, "quantity": number }],
@@ -17,7 +19,8 @@ Respond with ONE JSON object and nothing else, using exactly this shape:
   "total": number | null
 }
 Rules:
-- If the image is not a receipt or is unreadable, return {"is_receipt": false, "items": []}.
+- If the image is not a receipt at all, return {"is_receipt": false, "readable": false, "items": []}.
+- If it IS a receipt but too blurry, dark, cropped or crumpled to read the items and prices reliably, return {"is_receipt": true, "readable": false, "unreadable_reason": "<short reason>", "items": []}. Do not guess prices.
 - "price" is the LINE TOTAL for that line (already multiplied by quantity), not the unit price.
 - List every purchased line item in printed order. Do NOT include subtotal, tax, tip, total, payment, change or balance lines as items.
 - Discounts/comps/coupons: include them as items with a NEGATIVE price, placed right after the item they apply to.
@@ -36,7 +39,7 @@ function imageUrl(image: ImageInput): string {
   return `data:${image.mimeType || "image/jpeg"};base64,${data}`;
 }
 
-/** Calls Grok vision on the image and returns a normalized Receipt, or null if not a receipt. */
+/** Calls Grok vision on the image and classifies it as a readable receipt, unreadable receipt, or other photo. */
 export const analyzeReceipt: AnalyzeReceipt = async (image) => {
   const messages: GrokMessage[] = [
     { role: "system", content: SYSTEM_PROMPT },
@@ -53,10 +56,25 @@ export const analyzeReceipt: AnalyzeReceipt = async (image) => {
     json: true,
     temperature: 0,
   });
-  const raw = parseJsonLoose(text);
-  if (raw === undefined) return null;
-  return normalizeReceipt(raw);
+  return classifyReceipt(parseJsonLoose(text));
 };
+
+/**
+ * Turn Grok's raw JSON into a ReceiptAnalysis (pure, network-free).
+ * A receipt we can't extract any items from counts as unreadable, even if Grok said readable.
+ * Garbage output is treated as not_receipt so random photos never make the bot speak.
+ */
+export function classifyReceipt(raw: unknown): ReceiptAnalysis {
+  if (typeof raw === "string") raw = parseJsonLoose(raw);
+  if (!isRecord(raw) || raw.is_receipt !== true) return { status: "not_receipt" };
+  const reason =
+    typeof raw.unreadable_reason === "string" && raw.unreadable_reason.trim()
+      ? raw.unreadable_reason.trim()
+      : undefined;
+  if (raw.readable === false) return { status: "unreadable", reason };
+  const receipt = normalizeReceipt(raw);
+  return receipt ? { status: "ok", receipt } : { status: "unreadable", reason };
+}
 
 /** Parse JSON tolerant of ```json fences and surrounding prose. Returns undefined on failure. */
 export function parseJsonLoose(text: string): unknown {

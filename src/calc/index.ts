@@ -3,6 +3,7 @@ import type {
   FormatSummary,
   PersonShare,
   ReceiptItem,
+  SplitResult,
 } from "../types.js";
 
 // ---------- integer-cent helpers ----------
@@ -107,7 +108,11 @@ export const calculateSplit: CalculateSplit = (req) => {
   if (n > 0 && totalCents > 0) {
     const target = totalCents + (tipFromRate ? tipCents : 0);
     const diff = target - sum(preTotals);
-    if (diff !== 0) adjustments = allocate(diff, preTotals);
+    // A large gap almost always means the total was misread, not real fees.
+    // Skip the adjustment then; formatSummary flags the mismatch instead.
+    if (diff !== 0 && Math.abs(diff) <= maxAdjustmentCents(sum(preTotals))) {
+      adjustments = allocate(diff, preTotals);
+    }
   }
   const totals = preTotals.map((t, i) => t + adjustments[i]!);
 
@@ -152,6 +157,16 @@ export function formatMoney(amount: number, currency = "USD"): string {
 const FRACTIONS: Record<number, string> = { 2: "½", 3: "⅓", 4: "¼", 5: "⅕", 6: "⅙", 8: "⅛" };
 const fraction = (n: number): string => FRACTIONS[n] ?? `1/${n}`;
 
+/** Largest receipt-total adjustment we trust: 5% of the computed total, at least $5. */
+function maxAdjustmentCents(computedCents: number): number {
+  return Math.max(500, Math.round(computedCents * 0.05));
+}
+
+/** Tip added on top of the printed total (tipRate override), in cents. */
+function sumTips(result: SplitResult): number {
+  return sum(result.shares.map((s) => toCents(s.tip)));
+}
+
 export const formatSummary: FormatSummary = (result, receipt) => {
   const m = (x: number) => formatMoney(x, receipt.currency);
   const lines: string[] = [];
@@ -184,6 +199,10 @@ export const formatSummary: FormatSummary = (result, receipt) => {
 
   if (result.unclaimed.length) {
     lines.push(`⚠️ Unclaimed (split evenly): ${result.unclaimed.map((i) => i.name).join(", ")}`);
+  }
+  const expectedCents = toCents(receipt.total) + (toCents(receipt.tip) > 0 ? 0 : sumTips(result));
+  if (toCents(receipt.total) > 0 && expectedCents !== toCents(result.grandTotal)) {
+    lines.push(`⚠️ Receipt total reads ${m(fromCents(expectedCents))}, but the items add up to ${m(result.grandTotal)}. Double-check the receipt.`);
   }
   if (result.payerLabel) {
     lines.push(`💳 ${result.payerLabel} pays the restaurant ${m(result.grandTotal)}.`);

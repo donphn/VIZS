@@ -27,6 +27,6 @@ const image = /^https?:\/\//.test(path)
     } as const);
 
 const started = Date.now();
-const receipt = await analyzeReceipt(image);
-console.log(JSON.stringify(receipt, null, 2));
+const result = await analyzeReceipt(image);
+console.log(JSON.stringify(result, null, 2));
 console.error(`(${Date.now() - started}ms)`);

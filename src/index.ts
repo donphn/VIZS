@@ -1,16 +1,16 @@
 import "dotenv/config";
+import { createHandler } from "./app.js";
+import { calculateSplit, formatSummary } from "./calc/index.js";
 import { startBot } from "./photon/index.js";
+import { SessionManager } from "./session/index.js";
+import { analyzeReceipt } from "./vision/index.js";
 
-// TEMPORARY stub handler. The integrator replaces this with the real vision, session, and calc wiring.
-await startBot({
-  async onMessage(msg, reply) {
-    console.log("[bot] incoming", {
-      chatId: msg.chatId,
-      senderId: msg.senderId,
-      isGroup: msg.isGroup,
-      text: msg.text,
-      images: msg.images.map((i) => (i.kind === "url" ? i.url : `${i.mimeType} (${i.data.length} b64 chars)`)),
-    });
-    if (msg.images.length > 0) await reply("📸 got an image");
-  },
-});
+if (!process.env.GROK_API_KEY) {
+  console.error("Missing GROK_API_KEY. Copy .env.example to .env and fill it in.");
+  process.exit(1);
+}
+
+const session = new SessionManager({ calculateSplit, formatSummary });
+
+await startBot(createHandler({ analyzeReceipt, session }));
+console.log("🧾 Receipt splitter is running. Send a receipt photo to a chat with your Photon line.");

@@ -30,8 +30,18 @@ export type ImageInput =
   | { kind: "base64"; data: string; mimeType: string }
   | { kind: "url"; url: string };
 
-/** vision: returns null when the image is not a receipt (or unreadable). */
-export type AnalyzeReceipt = (image: ImageInput) => Promise<Receipt | null>;
+/**
+ * vision result:
+ * - ok: parsed receipt, ready to split
+ * - unreadable: it's a receipt, but too blurry/cropped/dark to extract items (tell the group)
+ * - not_receipt: any other photo (stay silent)
+ */
+export type ReceiptAnalysis =
+  | { status: "ok"; receipt: Receipt }
+  | { status: "unreadable"; reason?: string }
+  | { status: "not_receipt" };
+
+export type AnalyzeReceipt = (image: ImageInput) => Promise<ReceiptAnalysis>;
 
 // ---------- Split (produced by session, consumed by calc) ----------
 
