@@ -28,6 +28,8 @@ Optional `.env` settings: `GROK_VISION_MODEL` (default `grok-4.7`) and `GROK_BAS
          3. Fries $6.00
    Bot:  How many people are splitting this?
    You:  2
+   Bot:  How do you want to split it? 1. Items  2. Percent
+   You:  items               ← or "percent" (see below)
    Bot:  Person 1, which items did you have? …
    You:  Alex: 1, 3          ← "1 3", "2-4", "none" also work; names are optional
    Bot:  Got it, Alex: Burger, Fries. Person 2…
@@ -36,6 +38,8 @@ Optional `.env` settings: `GROK_VISION_MODEL` (default `grok-4.7`) and `GROK_BAS
    You:  done
    Bot:  🧾 Split for Joe's Diner — total $41.28 … Venmo Alex: • Sam → $…
    ```
+
+**Splitting by percentage:** reply `percent` to the "how do you want to split it?" question, then send everyone's share in one message: `50 30 20`, `Alex 60, Sam 40`, or `even`. The shares must add up to 100%. Food, tax and tip are all split by those percentages. You can also skip the question and send the percentages right away.
 
 **Commands during a split:** `status`, `undo` / `back`, `cancel`, `help`. At the end: `split` (share unclaimed items evenly), `assign 3,4 to 2`, a person number or name to set who's paying, then `done`.
 

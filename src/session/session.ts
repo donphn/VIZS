@@ -12,7 +12,9 @@ import {
   parseCommand,
   parseCount,
   parseIdList,
+  parseMode,
   parsePayer,
+  parsePercents,
   partitionIds,
 } from "./parse.js";
 
@@ -28,7 +30,7 @@ export interface SessionManagerOptions {
   now?: () => number;
 }
 
-type Phase = "AWAITING_COUNT" | "CLAIMING" | "CONFIRM";
+type Phase = "AWAITING_COUNT" | "CHOOSE_MODE" | "CLAIMING" | "PERCENT" | "CONFIRM";
 
 interface Person {
   name?: string;
@@ -38,6 +40,10 @@ interface Person {
 interface Session {
   receipt: Receipt;
   phase: Phase;
+  /** "items": each person claims items. "percent": each person pays a share of the whole bill. */
+  mode: "items" | "percent";
+  /** Percent mode only: parallel to people, sums to 100. */
+  percents: number[];
   people: Person[];
   /** Whose turn it is during CLAIMING. */
   index: number;
@@ -76,6 +82,8 @@ export class SessionManager implements SessionApi {
     this.sessions.set(chatId, {
       receipt,
       phase: "AWAITING_COUNT",
+      mode: "items",
+      percents: [],
       people: [],
       index: 0,
       payerIndex: 0,
@@ -123,8 +131,14 @@ export class SessionManager implements SessionApi {
       case "AWAITING_COUNT":
         out = this.onCount(s, text);
         break;
+      case "CHOOSE_MODE":
+        out = this.onChooseMode(s, text, cmd);
+        break;
       case "CLAIMING":
         out = this.onClaim(s, text, cmd);
+        break;
+      case "PERCENT":
+        out = this.onPercent(s, text, cmd);
         break;
       case "CONFIRM":
         out = this.onConfirm(chatId, s, text, cmd);
@@ -149,11 +163,73 @@ export class SessionManager implements SessionApi {
     }
     s.people = Array.from({ length: n }, () => ({ itemIds: new Set<number>() }));
     s.index = 0;
-    s.phase = "CLAIMING";
     s.payerIndex = 0;
     s.splitAcked = false;
-    const intro = n === 1 ? "Got it, just 1 person." : `Got it, ${n} people.`;
-    return [`${intro}\n${this.claimPrompt(s, true)}`];
+    s.percents = [];
+    if (n === 1) {
+      s.mode = "items";
+      s.phase = "CLAIMING";
+      return [`Got it, just 1 person.\n${this.claimPrompt(s, true)}`];
+    }
+    s.phase = "CHOOSE_MODE";
+    return [`Got it, ${n} people.\n${modeQuestion()}`];
+  }
+
+  private onChooseMode(s: Session, text: string, cmd: ReturnType<typeof parseCommand>): string[] {
+    if (cmd === "back") return [this.undo(s)];
+    const mode = cmd === "split" ? "even" : parseMode(text);
+    if (mode === "items") {
+      s.mode = "items";
+      s.phase = "CLAIMING";
+      s.index = 0;
+      return [`Item by item it is!\n${this.claimPrompt(s, true)}\n${this.itemsWithMarks(s)}`];
+    }
+    if (mode === "percent" || mode === "even") {
+      s.mode = "percent";
+      s.phase = "PERCENT";
+      if (mode === "even") return this.applyPercents(s, evenPercents(s.people.length), []);
+      return [this.percentPrompt(s)];
+    }
+    // Shortcut: they typed the percentages straight away ("50 30 20").
+    const pct = parsePercents(text);
+    if (pct && pct.percents.length === s.people.length) {
+      s.mode = "percent";
+      s.phase = "PERCENT";
+      return this.onPercent(s, text, null);
+    }
+    if (/\d/.test(text) && text.length <= 40) return [`Sorry, didn't catch that. ${modeQuestion()}`];
+    return [];
+  }
+
+  private onPercent(s: Session, text: string, cmd: ReturnType<typeof parseCommand>): string[] {
+    if (cmd === "back") return [this.undo(s)];
+    if (cmd === "split" || parseMode(text) === "even") {
+      return this.applyPercents(s, evenPercents(s.people.length), []);
+    }
+    const parsed = parsePercents(text);
+    if (!parsed) return []; // chit-chat
+    const n = s.people.length;
+    if (parsed.percents.length !== n) {
+      return [`I need ${n} percentages, one per person (you sent ${parsed.percents.length}). e.g. ${percentExample(n)}`];
+    }
+    const total = parsed.percents.reduce((a, b) => a + b, 0);
+    if (Math.abs(total - 100) > 0.1) {
+      return [`Those add up to ${Math.round(total * 10) / 10}%, but they need to total 100%. Try again, e.g. ${percentExample(n)}`];
+    }
+    return this.applyPercents(s, parsed.percents, parsed.names);
+  }
+
+  private applyPercents(s: Session, percents: number[], names: (string | undefined)[]): string[] {
+    s.percents = percents;
+    names.forEach((name, i) => {
+      if (name) s.people[i].name = name;
+    });
+    s.phase = "CONFIRM";
+    const fmt = (n: number) => money(n, s.receipt.currency);
+    const lines = s.people.map(
+      (_, i) => `${this.label(s, i)}: ${fmtPct(percents[i])} ≈ ${fmt((s.receipt.total * percents[i]) / 100)}`,
+    );
+    return [`✓ Splitting by percentage:\n${lines.join("\n")}\n\n${this.payerQuestion(s)}`];
   }
 
   private onClaim(s: Session, text: string, cmd: ReturnType<typeof parseCommand>): string[] {
@@ -257,6 +333,23 @@ export class SessionManager implements SessionApi {
 
   private undo(s: Session): string {
     s.splitAcked = false;
+    if (s.phase === "CHOOSE_MODE") {
+      s.phase = "AWAITING_COUNT";
+      s.people = [];
+      s.countNudged = false;
+      return "Ok, starting over. How many people are splitting this?";
+    }
+    if (s.phase === "PERCENT" || (s.phase === "CLAIMING" && s.index === 0 && s.people.length > 1)) {
+      s.phase = "CHOOSE_MODE";
+      s.people.forEach((p) => p.itemIds.clear());
+      s.percents = [];
+      return `Ok. ${modeQuestion()}`;
+    }
+    if (s.phase === "CONFIRM" && s.mode === "percent") {
+      s.phase = "PERCENT";
+      s.percents = [];
+      return `Ok, let's redo the percentages.\n${this.percentPrompt(s)}`;
+    }
     if (s.phase === "CONFIRM") {
       s.phase = "CLAIMING";
       s.index = s.people.length - 1;
@@ -278,7 +371,12 @@ export class SessionManager implements SessionApi {
       itemIds: [...p.itemIds].sort((a, b) => a - b),
     }));
     try {
-      const result = this.calculateSplit({ receipt: s.receipt, participants, payerIndex: s.payerIndex });
+      const result = this.calculateSplit({
+        receipt: s.receipt,
+        participants: s.mode === "percent" ? participants.map((p) => ({ ...p, itemIds: [] })) : participants,
+        payerIndex: s.payerIndex,
+        ...(s.mode === "percent" ? { percentages: s.percents } : {}),
+      });
       const summary = this.formatSummary(result, s.receipt);
       this.sessions.delete(chatId);
       return [summary];
@@ -288,6 +386,14 @@ export class SessionManager implements SessionApi {
   }
 
   // ---------- text builders ----------
+
+  private percentPrompt(s: Session): string {
+    const n = s.people.length;
+    return (
+      `What percentage does each person pay? Send ${n} numbers that add up to 100, ` +
+      `e.g. ${percentExample(n)}, or "even". Names are optional: "Alex 60, Sam 40".`
+    );
+  }
 
   private claimPrompt(s: Session, first: boolean): string {
     const q = `${this.label(s, s.index)}, which items did you have?`;
@@ -332,6 +438,10 @@ export class SessionManager implements SessionApi {
     switch (s.phase) {
       case "AWAITING_COUNT":
         return `Splitting ${total}. Waiting to hear how many people are splitting.`;
+      case "CHOOSE_MODE":
+        return `Splitting ${total} between ${s.people.length}.\n${modeQuestion()}`;
+      case "PERCENT":
+        return `Splitting ${total} between ${s.people.length} by percentage.\n${this.percentPrompt(s)}`;
       case "CLAIMING": {
         const done = s.people
           .slice(0, s.index)
@@ -344,8 +454,10 @@ export class SessionManager implements SessionApi {
         ].join("\n");
       }
       case "CONFIRM": {
-        const done = s.people.map(
-          (p, i) => `${this.label(s, i)}: ${p.itemIds.size ? [...p.itemIds].join(", ") : "nothing"}`,
+        const done = s.people.map((p, i) =>
+          s.mode === "percent"
+            ? `${this.label(s, i)}: ${fmtPct(s.percents[i])}`
+            : `${this.label(s, i)}: ${p.itemIds.size ? [...p.itemIds].join(", ") : "nothing"}`,
         );
         return [`Splitting ${total} between ${s.people.length}.`, ...done, "", this.confirmPrompt(s, true)].join("\n");
       }
@@ -377,6 +489,7 @@ export class SessionManager implements SessionApi {
   }
 
   private unclaimed(s: Session): ReceiptItem[] {
+    if (s.mode === "percent") return [];
     return s.receipt.items.filter((it) => !s.people.some((p) => p.itemIds.has(it.id)));
   }
 
@@ -408,6 +521,15 @@ export class SessionManager implements SessionApi {
 function helpText(s: Session): string {
   const lines = ["Here's how this works:"];
   if (s.phase === "AWAITING_COUNT") lines.push("• Reply with how many people are splitting, e.g. \"3\"");
+  if (s.phase === "CHOOSE_MODE" || s.phase === "PERCENT" || s.mode === "percent") {
+    lines.push(
+      "• \"items\" to claim what each person had, or \"percent\" to split by percentage",
+      "• Percentages: \"50 30 20\", \"Alex 60, Sam 40\" or \"even\"",
+      "• \"undo\" goes back a step, \"status\" shows progress, \"cancel\" stops the split",
+    );
+    if (s.phase === "CONFIRM") lines.push("• A person number for who's paying, \"done\" to finish");
+    return lines.join("\n");
+  }
   lines.push(
     "• When it's your turn, reply with item numbers: \"1, 3\", \"2-4\" or \"none\"",
     "• Add a name: \"Alex: 1, 3\" or \"I'm Alex 1 3\"",
@@ -419,6 +541,28 @@ function helpText(s: Session): string {
     lines.push("• \"assign 4 to 2\" or \"split\" for unclaimed items, a person number for who's paying, \"done\" to finish");
   }
   return lines.join("\n");
+}
+
+function modeQuestion(): string {
+  return (
+    "How do you want to split it?\n" +
+    "1. Items: everyone claims what they ordered\n" +
+    "2. Percent: everyone pays a share of the bill (or \"even\")\n" +
+    "Reply \"items\" or \"percent\"."
+  );
+}
+
+function evenPercents(n: number): number[] {
+  return Array.from({ length: n }, () => 100 / n);
+}
+
+function fmtPct(p: number): string {
+  return `${Math.round(p * 10) / 10}%`;
+}
+
+function percentExample(n: number): string {
+  const examples: Record<number, string> = { 2: '"60 40"', 3: '"50 30 20"', 4: '"40 30 20 10"' };
+  return examples[n] ?? `"${evenPercents(n).map((p) => Math.round(p)).join(" ")}"`;
 }
 
 function itemLine(it: ReceiptItem, currency: string): string {

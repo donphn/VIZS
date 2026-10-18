@@ -59,8 +59,11 @@ export const calculateSplit: CalculateSplit = (req) => {
   const itemCents: { id: number; name: string; amount: number }[][] = participants.map(() => []);
   const unclaimed: ReceiptItem[] = [];
   const claimSets = participants.map((p) => new Set(p.itemIds));
+  const percents = req.percentages?.length === n ? req.percentages : undefined;
+  // Percentage mode splits food, tax and tip by these weights instead of item claims.
+  const pctWeights = percents?.map((p) => Math.max(0, Math.round(p * 100)));
 
-  receipt.items.forEach((item, idx) => {
+  if (!pctWeights) receipt.items.forEach((item, idx) => {
     const cents = toCents(item.price);
     let claimants = claimSets.flatMap((s, i) => (s.has(item.id) ? [i] : []));
     if (claimants.length === 0) {
@@ -74,7 +77,9 @@ export const calculateSplit: CalculateSplit = (req) => {
     });
   });
 
-  const subtotals = itemCents.map((xs) => sum(xs.map((x) => x.amount)));
+  const subtotals = pctWeights
+    ? allocate(sum(receipt.items.map((it) => toCents(it.price))), pctWeights)
+    : itemCents.map((xs) => sum(xs.map((x) => x.amount)));
 
   // Tax and tip are allocated proportionally to each person's item subtotal
   // (allocate() falls back to an even split when everyone's subtotal is 0).
@@ -88,8 +93,8 @@ export const calculateSplit: CalculateSplit = (req) => {
     tipCents = Math.round(base * req.tipRate);
     tipFromRate = true;
   }
-  const taxes = allocate(taxCents, subtotals);
-  const tips = allocate(tipCents, subtotals);
+  const taxes = allocate(taxCents, pctWeights ?? subtotals);
+  const tips = allocate(tipCents, pctWeights ?? subtotals);
 
   // Reconciliation to the receipt.
   // The item prices often don't sum exactly to receipt.subtotal (OCR noise,
@@ -123,6 +128,7 @@ export const calculateSplit: CalculateSplit = (req) => {
     tax: fromCents(taxes[i]!),
     tip: fromCents(tips[i]!),
     total: fromCents(totals[i]!),
+    ...(percents ? { percent: percents[i]! } : {}),
   }));
 
   const payerLabel = participants[payerIndex]?.label ?? "";
@@ -157,6 +163,11 @@ export function formatMoney(amount: number, currency = "USD"): string {
 const FRACTIONS: Record<number, string> = { 2: "½", 3: "⅓", 4: "¼", 5: "⅕", 6: "⅙", 8: "⅛" };
 const fraction = (n: number): string => FRACTIONS[n] ?? `1/${n}`;
 
+/** 50 → "50%", 33.3333 → "33.3%". */
+export function formatPercent(p: number): string {
+  return `${Math.round(p * 10) / 10}%`;
+}
+
 /** Largest receipt-total adjustment we trust: 5% of the computed total, at least $5. */
 function maxAdjustmentCents(computedCents: number): number {
   return Math.max(500, Math.round(computedCents * 0.05));
@@ -182,14 +193,19 @@ export const formatSummary: FormatSummary = (result, receipt) => {
   }
 
   for (const s of result.shares) {
-    lines.push(`${s.label} — ${m(s.total)}`);
-    if (s.items.length === 0) lines.push("  (no items)");
+    if (s.percent !== undefined) {
+      lines.push(`${s.label} (${formatPercent(s.percent)}) — ${m(s.total)}`);
+    } else {
+      lines.push(`${s.label} — ${m(s.total)}`);
+      if (s.items.length === 0) lines.push("  (no items)");
+    }
+    const food = s.percent !== undefined && toCents(s.itemsSubtotal) !== 0 ? [`food ${m(s.itemsSubtotal)}`] : [];
     for (const it of s.items) {
       const k = shareCount.get(it.id) ?? 1;
       const frac = k > 1 ? ` (${fraction(k)})` : "";
       lines.push(`  • ${it.name}${frac} ${m(it.amount)}`);
     }
-    const extras: string[] = [];
+    const extras: string[] = [...food];
     if (toCents(s.tax) !== 0) extras.push(`tax ${m(s.tax)}`);
     if (toCents(s.tip) !== 0) extras.push(`tip ${m(s.tip)}`);
     const adj = toCents(s.total) - toCents(s.itemsSubtotal) - toCents(s.tax) - toCents(s.tip);

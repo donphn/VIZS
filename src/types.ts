@@ -59,6 +59,11 @@ export interface SplitRequest {
   payerIndex?: number;
   /** Optional tip override as a fraction of subtotal (e.g. 0.18) when receipt.tip is 0. */
   tipRate?: number;
+  /**
+   * Percentage mode: each participant's share of the whole bill, parallel to
+   * participants (sums to 100). When set, item claims are ignored.
+   */
+  percentages?: number[];
 }
 
 export interface PersonShare {
@@ -68,6 +73,8 @@ export interface PersonShare {
   tax: number;
   tip: number;
   total: number;
+  /** Set in percentage mode. */
+  percent?: number;
 }
 
 export interface SplitResult {

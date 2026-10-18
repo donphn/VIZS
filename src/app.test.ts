@@ -43,7 +43,8 @@ describe("end-to-end flow", () => {
     const opening = await say({ images: [photo] });
     expect(opening.join("\n")).toMatch(/How many people/i);
 
-    expect((await say({ text: "2" })).join("\n")).toMatch(/Person 1/);
+    expect((await say({ text: "2" })).join("\n")).toMatch(/items.*percent/is);
+    expect((await say({ text: "items" })).join("\n")).toMatch(/Person 1/);
     expect(await say({ text: "Alex: 1, 3" })).toHaveLength(1);
     await say({ text: "Sam: 2, 3" });
     const final = (await say({ text: "done" })).join("\n");
@@ -106,5 +107,21 @@ describe("classifyReceipt", () => {
     });
     // Says readable but no usable items → still unreadable.
     expect(classifyReceipt({ is_receipt: true, readable: true, items: [] }).status).toBe("unreadable");
+  });
+});
+
+describe("percent mode end-to-end (real calc)", () => {
+  it("splits food, tax and tip by percentage and sums to the total", async () => {
+    const { say } = harness(async () => ({ status: "ok", receipt }));
+    await say({ images: [photo] });
+    await say({ text: "3" });
+    await say({ text: "percent" });
+    await say({ text: "Alex 50, Sam 25, Jo 25" });
+    const final = (await say({ text: "done" })).join("\n");
+    expect(final).toContain("Alex (50%) — $20.64");
+    expect(final).toContain("Sam (25%) — $10.32");
+    expect(final).toContain("Jo (25%) — $10.32");
+    expect(final).toContain("Alex pays the restaurant $41.28");
+    expect(final).not.toContain("(no items)");
   });
 });

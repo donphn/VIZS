@@ -150,7 +150,8 @@ describe("SessionManager", () => {
   it("happy path: 3 people with names and a payer", () => {
     const { sm, say, calls, formatSummary } = setup();
     sm.start("c1", receipt);
-    const r1 = say("3 people");
+    expect(say("3 people")[0]).toContain("How do you want to split it?");
+    const r1 = say("items");
     expect(r1[0]).toContain("Person 1, which items did you have?");
 
     const r2 = say("Alex: 1, 2");
@@ -188,6 +189,7 @@ describe("SessionManager", () => {
     const { sm, say, calls } = setup();
     sm.start("c1", receipt);
     say("two");
+    say("items");
     say("1-3");
     say("4 5");
     expect(say("done")).toEqual(["SUMMARY payer=Person 1"]);
@@ -208,6 +210,7 @@ describe("SessionManager", () => {
     const { sm, say } = setup();
     sm.start("c1", receipt);
     say("2");
+    say("items");
     const r = say("1, 7, 9");
     expect(r[0]).toContain("no item 7 or 9");
     expect(r[0]).toContain("items are 1-5");
@@ -222,6 +225,7 @@ describe("SessionManager", () => {
     const { sm, say } = setup();
     sm.start("c1", receipt);
     say("2");
+    say("items");
     expect(say("haha that burger was huge")).toEqual([]);
     expect(say("ok")).toEqual([]);
     expect(say("who ordered pie?")).toEqual([]);
@@ -234,6 +238,7 @@ describe("SessionManager", () => {
     const { sm, say, calls } = setup();
     sm.start("c1", receipt);
     say("2");
+    say("items");
     say("1 2");
     const r = say("2, 3, 4, 5");
     expect(r[0]).toContain("Everyone's in");
@@ -245,6 +250,7 @@ describe("SessionManager", () => {
     const { sm, say } = setup();
     sm.start("c1", receipt);
     say("3");
+    say("items");
     say("Alex: 2");
     const r = say("Bo: 2");
     expect(r[0]).toMatch(/2\. Fries \$4\.50 ✓ Alex, Bo/);
@@ -254,6 +260,7 @@ describe("SessionManager", () => {
     const { sm, say, calls } = setup();
     sm.start("c1", receipt);
     say("2");
+    say("items");
     expect(say("none")[0]).toContain("Person 1: nothing");
     say("1-5");
     say("ok");
@@ -264,6 +271,7 @@ describe("SessionManager", () => {
     const { sm, say, calls } = setup();
     sm.start("c1", receipt);
     say("2");
+    say("items");
     say("1");
     const r = say("2");
     expect(r[0]).toContain("Nobody claimed");
@@ -285,6 +293,7 @@ describe("SessionManager", () => {
     const { sm, say, calls } = setup();
     sm.start("c1", receipt);
     say("3");
+    say("items");
     say("Alex: 1");
     say("2");
     say("none");
@@ -307,6 +316,7 @@ describe("SessionManager", () => {
     const { sm, say, calls } = setup();
     sm.start("c1", receipt);
     say("2");
+    say("items");
     say("1");
     say("2");
     expect(say("5")[0]).toContain("no person 5");
@@ -322,6 +332,7 @@ describe("SessionManager", () => {
     const { sm, say, calls } = setup();
     sm.start("c1", receipt);
     say("3");
+    say("items");
     say("Alex: 1");
     say("2");
     const r = say("undo");
@@ -342,6 +353,7 @@ describe("SessionManager", () => {
     say("1");
     expect(say("undo")[0]).toContain("How many people");
     say("2");
+    say("items");
     say("1");
     say("2-5");
     expect(say("undo")[0]).toContain("redo Person 2");
@@ -359,6 +371,7 @@ describe("SessionManager", () => {
 
     sm.start("c1", receipt);
     say("2");
+    say("items");
     expect(say("Stop")[0]).toContain("cancelled");
     expect(sm.hasSession("c1")).toBe(false);
 
@@ -373,6 +386,8 @@ describe("SessionManager", () => {
     expect(say("status")[0]).toContain("how many people");
     expect(say("help")[0]).toContain("how this works");
     say("2");
+    expect(say("status")[0]).toContain("How do you want to split it?");
+    say("items");
     say("Alex: 1");
     const st = say("status")[0];
     expect(st).toContain("Alex: 1");
@@ -398,6 +413,7 @@ describe("SessionManager", () => {
     const { sm, say, advance } = setup();
     sm.start("c1", receipt);
     say("2");
+    say("items");
     advance(29 * 60 * 1000);
     expect(say("lol")).toEqual([]);
     advance(2 * 60 * 1000);
@@ -408,6 +424,7 @@ describe("SessionManager", () => {
     const { sm, say } = setup();
     sm.start("c1", receipt);
     say("3");
+    say("items");
     say("1");
     const out = sm.start("c1", receipt, "Dana");
     expect(out[0]).toContain("Previous split discarded");
@@ -439,5 +456,78 @@ describe("SessionManager", () => {
     const out = sm.start("c1", { ...receipt, merchant: undefined, currency: "EUR", tip: 2 });
     expect(out[0]).toContain("Receipt total €42.00");
     expect(out[0]).toContain("tip €2.00");
+  });
+});
+
+describe("percent mode", () => {
+  it("parseMode and parsePercents", async () => {
+    const { parseMode, parsePercents } = await import("./parse.js");
+    expect(parseMode("items")).toBe("items");
+    expect(parseMode("Item-wise")).toBe("items");
+    expect(parseMode("1")).toBe("items");
+    expect(parseMode("percentage wise")).toBe("percent");
+    expect(parseMode("2")).toBe("percent");
+    expect(parseMode("%")).toBe("percent");
+    expect(parseMode("even")).toBe("even");
+    expect(parseMode("lol")).toBeNull();
+    expect(parsePercents("50 30 20")?.percents).toEqual([50, 30, 20]);
+    expect(parsePercents("50/50")?.percents).toEqual([50, 50]);
+    expect(parsePercents("40%, 60%")?.percents).toEqual([40, 60]);
+    expect(parsePercents("Alex 60, sam: 40")).toEqual({ percents: [60, 40], names: ["Alex", "Sam"] });
+    expect(parsePercents("33.3 33.3 33.4")?.percents).toEqual([33.3, 33.3, 33.4]);
+    expect(parsePercents("see you at 7")).toBeNull();
+    expect(parsePercents("hello")).toBeNull();
+  });
+
+  it("splits by percentages with names and a payer", () => {
+    const { sm, say, calls } = setup();
+    sm.start("c1", receipt);
+    say("3");
+    expect(say("percent")[0]).toContain("add up to 100");
+    const r = say("Alex 50, Sam 30, Jo 20");
+    expect(r[0]).toContain("Alex: 50% ≈ $21.00");
+    expect(r[0]).toContain("Who's paying");
+    expect(say("2")).toEqual(["SUMMARY payer=Sam"]);
+    expect(calls[0].percentages).toEqual([50, 30, 20]);
+    expect(calls[0].participants.map((p) => p.label)).toEqual(["Alex", "Sam", "Jo"]);
+    expect(calls[0].participants.every((p) => p.itemIds.length === 0)).toBe(true);
+  });
+
+  it("accepts percentages or 'even' directly at the mode question", () => {
+    const a = setup();
+    a.sm.start("c1", receipt);
+    a.say("2");
+    expect(a.say("70 30")[0]).toContain("Splitting by percentage");
+    a.say("done");
+    expect(a.calls[0].percentages).toEqual([70, 30]);
+
+    const b = setup();
+    b.sm.start("c1", receipt);
+    b.say("3");
+    expect(b.say("even")[0]).toContain("33.3%");
+    b.say("done");
+    expect(b.calls[0].percentages).toHaveLength(3);
+  });
+
+  it("rejects wrong count or total and stays quiet on chit-chat", () => {
+    const { sm, say } = setup();
+    sm.start("c1", receipt);
+    say("3");
+    say("percentage");
+    expect(say("50 50")[0]).toContain("I need 3 percentages");
+    expect(say("50 30 30")[0]).toContain("add up to 110%");
+    expect(say("lol ok")).toEqual([]);
+    expect(say("split evenly")[0]).toContain("Splitting by percentage");
+  });
+
+  it("undo steps back through percent mode", () => {
+    const { sm, say } = setup();
+    sm.start("c1", receipt);
+    say("2");
+    say("percent");
+    say("60 40");
+    expect(say("undo")[0]).toContain("redo the percentages");
+    expect(say("undo")[0]).toContain("How do you want to split it?");
+    expect(say("undo")[0]).toContain("How many people");
   });
 });

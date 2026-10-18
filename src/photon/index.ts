@@ -67,6 +67,10 @@ export async function startBot(
     const incoming = await toIncomingMessage(space, message, {
       convertHeic: convertHeic ? heicToJpeg : undefined,
     });
+    console.log(
+      `[photon] event chat=${space.id} content=${(message as { content?: { type?: string } }).content?.type ?? "?"}` +
+        (incoming ? ` images=${incoming.images.length} text=${incoming.text ? "yes" : "no"}` : " (ignored)"),
+    );
     if (!incoming) return;
     const reply = async (text: string) => {
       await space.send(text);

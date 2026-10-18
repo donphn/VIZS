@@ -222,3 +222,40 @@ export function parsePayer(text: string): { number: number } | { name: string } 
   if (/^[a-z][a-z'.-]*(?: [a-z][a-z'.-]*){0,2}$/.test(stripped)) return { name: stripped };
   return null;
 }
+
+export type SplitMode = "items" | "percent" | "even";
+
+/**
+ * Parse the split-mode choice: "items" / "1" / "itemwise", "percent" / "2" / "%",
+ * or "even" (percent mode with equal shares). Returns null otherwise.
+ */
+export function parseMode(text: string): SplitMode | null {
+  const t = normalize(text).toLowerCase().replace(/[.!?]+$/g, "").replace(/[\s_-]+/g, "").trim();
+  if (/^(1|items?|itemwise|byitems?|itemized|peritems?|whatweordered|whatwehad)$/.test(t)) return "items";
+  if (/^(2|%|percent(s|age|ages)?(wise)?|bypercent(age)?|pct)$/.test(t)) return "percent";
+  if (/^(even(ly)?|equal(ly)?|splitevenly|evensplit)$/.test(t)) return "even";
+  return null;
+}
+
+/**
+ * Parse percentage shares: "50 30 20", "50/50", "40%, 60%", "Alex 50, Sam 30, Jo 20",
+ * "Alex: 60 Sam: 40". Returns null if the text holds no numbers or contains unrelated words.
+ * Count and total are validated by the caller.
+ */
+export function parsePercents(text: string): { percents: number[]; names: (string | undefined)[] } | null {
+  const t = normalize(text).replace(/[.!?]+$/g, "");
+  if (!/\d/.test(t)) return null;
+  const percents: number[] = [];
+  const names: (string | undefined)[] = [];
+  const re = /([A-Za-z][A-Za-z'.-]*)?\s*[:=-]?\s*(\d+(?:\.\d+)?)\s*%?/g;
+  for (const m of t.matchAll(re)) {
+    const word = m[1];
+    if (word && !isNameWord(word) && !/^and$/i.test(word)) return null;
+    names.push(word && isNameWord(word) ? capitalize(word) : undefined);
+    percents.push(parseFloat(m[2]));
+  }
+  // Anything left besides separators means this wasn't a percentage answer.
+  const leftover = t.replace(re, "").replace(/[\s,;/&]+|\band\b/gi, "");
+  if (leftover) return null;
+  return percents.length ? { percents, names } : null;
+}
