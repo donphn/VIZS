@@ -39,8 +39,59 @@ function imageUrl(image: ImageInput): string {
   return `data:${image.mimeType || "image/jpeg"};base64,${data}`;
 }
 
-/** Calls Grok vision on the image and classifies it as a readable receipt, unreadable receipt, or other photo. */
+/** Fast non-reasoning model for the "is this even a receipt?" check (~0.6s vs ~3s+ for full extraction). */
+export const DEFAULT_CLASSIFY_MODEL = "grok-4.20-0309-non-reasoning";
+
+const QUICK_PROMPT =
+  "Is this image a photo or screenshot of a purchase receipt, bill, check or invoice? " +
+  'Say true even if it is blurry, cropped or partly unreadable. Answer only with JSON {"is_receipt": boolean}.';
+
+/**
+ * Classifies the image as a readable receipt, unreadable receipt, or other photo.
+ *
+ * Runs a quick yes/no check on a fast model in parallel with the full extraction.
+ * If the quick check says "not a receipt", the extraction is aborted, so ordinary
+ * photos are dismissed in under a second. Receipts take as long as before.
+ * If the quick check fails, we fall back to the full extraction's answer.
+ */
 export const analyzeReceipt: AnalyzeReceipt = async (image) => {
+  const abort = new AbortController();
+  const full = extractReceipt(image, abort.signal);
+  full.catch(() => {}); // awaited below unless we abort it
+
+  const looksLikeReceipt = await quickIsReceipt(image).catch(() => true);
+  if (!looksLikeReceipt) {
+    abort.abort();
+    return { status: "not_receipt" };
+  }
+  return full;
+};
+
+async function quickIsReceipt(image: ImageInput): Promise<boolean> {
+  const text = await grokChat(
+    [
+      {
+        role: "user",
+        content: [
+          { type: "image_url", image_url: { url: imageUrl(image), detail: "low" } },
+          { type: "text", text: QUICK_PROMPT },
+        ],
+      },
+    ],
+    {
+      model: process.env.GROK_CLASSIFY_MODEL || DEFAULT_CLASSIFY_MODEL,
+      json: true,
+      temperature: 0,
+      maxTokens: 20,
+      timeoutMs: 15_000,
+    },
+  );
+  const raw = parseJsonLoose(text);
+  // Only a clear "false" dismisses the photo; anything unexpected defers to the full extraction.
+  return !(isRecord(raw) && raw.is_receipt === false);
+}
+
+async function extractReceipt(image: ImageInput, signal: AbortSignal) {
   const messages: GrokMessage[] = [
     { role: "system", content: SYSTEM_PROMPT },
     {
@@ -55,9 +106,10 @@ export const analyzeReceipt: AnalyzeReceipt = async (image) => {
     model: process.env.GROK_VISION_MODEL || DEFAULT_GROK_MODEL,
     json: true,
     temperature: 0,
+    signal,
   });
   return classifyReceipt(parseJsonLoose(text));
-};
+}
 
 /**
  * Turn Grok's raw JSON into a ReceiptAnalysis (pure, network-free).

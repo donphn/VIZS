@@ -43,6 +43,8 @@ export class KeyedQueue {
   }
 }
 
+const TYPING_DELAY_MS = 1500;
+
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 /**
@@ -80,13 +82,20 @@ export async function startBot(
       // Text is handled in-process in ~1ms; a typing indicator would only add a Photon round trip.
       await handlers.onMessage(incoming, reply);
     } else {
-      // Photos wait on Grok for a few seconds: show "typing…" meanwhile, without blocking on it.
-      const typing = space.startTyping().catch(() => {});
+      // Receipts take a few seconds in Grok, so show "typing…" — but only after a short delay,
+      // so non-receipt photos (dismissed in under a second) never flash it.
+      let typing: Promise<void> | undefined;
+      const timer = setTimeout(() => {
+        typing = space.startTyping().catch(() => {});
+      }, TYPING_DELAY_MS);
       try {
         await handlers.onMessage(incoming, reply);
       } finally {
-        await typing;
-        void space.stopTyping().catch(() => {});
+        clearTimeout(timer);
+        if (typing) {
+          await typing;
+          void space.stopTyping().catch(() => {});
+        }
       }
     }
     console.log(`[photon] handled in ${Date.now() - started}ms`);
