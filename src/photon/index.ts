@@ -75,8 +75,21 @@ export async function startBot(
     const reply = async (text: string) => {
       await space.send(text);
     };
-    // responding() shows a typing indicator while the handler runs.
-    await space.responding(() => handlers.onMessage(incoming, reply));
+    const started = Date.now();
+    if (incoming.images.length === 0) {
+      // Text is handled in-process in ~1ms; a typing indicator would only add a Photon round trip.
+      await handlers.onMessage(incoming, reply);
+    } else {
+      // Photos wait on Grok for a few seconds: show "typing…" meanwhile, without blocking on it.
+      const typing = space.startTyping().catch(() => {});
+      try {
+        await handlers.onMessage(incoming, reply);
+      } finally {
+        await typing;
+        void space.stopTyping().catch(() => {});
+      }
+    }
+    console.log(`[photon] handled in ${Date.now() - started}ms`);
   };
 
   const loop = async () => {
