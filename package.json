@@ -1,0 +1,25 @@
+{
+  "name": "receipt-splitter-bot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Group receipt splitter bot for Photon (Spectrum) iMessage groups, powered by Grok",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "dev": "tsx watch src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.5"
+  },
+  "dependencies": {
+    "dotenv": "^18.0.8"
+  }
+}
